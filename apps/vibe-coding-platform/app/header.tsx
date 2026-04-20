@@ -1,3 +1,4 @@
+import { SettingsButton } from '@/components/settings-button'
 import { ToggleWelcome } from '@/components/modals/welcome'
 import { VercelDashed } from '@/components/icons/vercel-dashed'
 import { cn } from '@/lib/utils'
@@ -17,6 +18,7 @@ export async function Header({ className }: Props) {
       </div>
       <div className="flex items-center ml-auto space-x-1.5">
         <ToggleWelcome />
+        <SettingsButton />
       </div>
     </header>
   )

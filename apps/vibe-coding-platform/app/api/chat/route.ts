@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server'
 import { getModelOptions } from '@/ai/gateway'
 import { checkBotId } from 'botid/server'
 import { createHash } from 'node:crypto'
+import { fetchContextBlock } from '@/lib/infrastructure/notion-mcp'
 import { provisionDatabase } from '@/lib/infrastructure/neon'
 import { tools } from '@/ai/tools'
 import prompt from './prompt.md'
@@ -49,7 +50,11 @@ export async function POST(req: Request) {
     )
   }
 
-  const provisionedUrl = await provisionDatabase(sessionId)
+  const origin = new URL(req.url).origin
+  const [provisionedUrl, notionContext] = await Promise.all([
+    provisionDatabase(sessionId),
+    fetchContextBlock(sessionId, origin),
+  ])
   const isDbReady = Boolean(provisionedUrl)
   const dbStatusContext = isDbReady
     ? [
@@ -72,7 +77,9 @@ export async function POST(req: Request) {
       execute: async ({ writer }) => {
         const result = streamText({
           ...getModelOptions(modelId, { reasoningEffort }),
-          system: `${prompt}\n\n${dbStatusContext}`,
+          system: [prompt, dbStatusContext, notionContext]
+            .filter(Boolean)
+            .join('\n\n'),
           messages: await convertToModelMessages(
             messages.map((message) => {
               message.parts = message.parts.map((part) => {
