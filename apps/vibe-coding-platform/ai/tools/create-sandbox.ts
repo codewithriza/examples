@@ -1,6 +1,7 @@
 import type { UIMessageStreamWriter, UIMessage } from 'ai'
 import type { DataPart } from '../messages/data-parts'
 import { Sandbox } from '@vercel/sandbox'
+import { databaseNameFor, provisionDatabase } from '@/lib/infrastructure/neon'
 import { getRichError } from './get-rich-error'
 import { tool } from 'ai'
 import description from './create-sandbox.md'
@@ -8,9 +9,10 @@ import z from 'zod/v3'
 
 interface Params {
   writer: UIMessageStreamWriter<UIMessage<never, DataPart>>
+  sessionId: string
 }
 
-export const createSandbox = ({ writer }: Params) =>
+export const createSandbox = ({ writer, sessionId }: Params) =>
   tool({
     description,
     inputSchema: z.object({
@@ -37,6 +39,34 @@ export const createSandbox = ({ writer }: Params) =>
         data: { status: 'loading' },
       })
 
+      const dbCallId = `${toolCallId}-db`
+      const databaseName = databaseNameFor(sessionId)
+      writer.write({
+        id: dbCallId,
+        type: 'data-provision-database',
+        data: { status: 'provisioning', databaseName },
+      })
+
+      let provisionedUrl: string | null = null
+      try {
+        provisionedUrl = await provisionDatabase(sessionId)
+      } catch (err) {
+        console.error('[createSandbox] Neon provisioning threw:', err)
+      }
+      const isDbReady = Boolean(provisionedUrl)
+
+      writer.write({
+        id: dbCallId,
+        type: 'data-provision-database',
+        data: isDbReady
+          ? { status: 'ready', databaseName }
+          : {
+              status: 'unavailable',
+              databaseName,
+              error: { message: 'Neon database could not be provisioned' },
+            },
+      })
+
       try {
         const sandbox = await Sandbox.create({
           timeout: timeout ?? 600000,
@@ -49,9 +79,14 @@ export const createSandbox = ({ writer }: Params) =>
           data: { sandboxId: sandbox.sandboxId, status: 'done' },
         })
 
+        const dbLine = isDbReady
+          ? `\nA Neon PostgreSQL database is available at process.env.DATABASE_URL (pooled).`
+          : `\nNo database is available in this sandbox; operate in-memory only.`
+
         return (
           `Sandbox created with ID: ${sandbox.sandboxId}.` +
-          `\nYou can now upload files, run commands, and access services on the exposed ports.`
+          `\nYou can now upload files, run commands, and access services on the exposed ports.` +
+          dbLine
         )
       } catch (error) {
         const richError = getRichError({

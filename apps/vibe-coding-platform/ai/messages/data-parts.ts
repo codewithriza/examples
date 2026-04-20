@@ -32,6 +32,11 @@ export const dataPartSchema = z.object({
     summary: z.string(),
     paths: z.array(z.string()).optional(),
   }),
+  'provision-database': z.object({
+    status: z.enum(['provisioning', 'ready', 'unavailable']),
+    databaseName: z.string().optional(),
+    error: errorSchema.optional(),
+  }),
 })
 
 export type DataPart = z.infer<typeof dataPartSchema>

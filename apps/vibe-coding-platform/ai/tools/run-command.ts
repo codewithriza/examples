@@ -1,6 +1,8 @@
 import type { UIMessageStreamWriter, UIMessage } from 'ai'
 import type { DataPart } from '../messages/data-parts'
 import { Command, Sandbox } from '@vercel/sandbox'
+import { provisionDatabase } from '@/lib/infrastructure/neon'
+import { redactSecrets } from '@/lib/infrastructure/redact'
 import { getRichError } from './get-rich-error'
 import { tool } from 'ai'
 import description from './run-command.md'
@@ -8,9 +10,10 @@ import z from 'zod/v3'
 
 interface Params {
   writer: UIMessageStreamWriter<UIMessage<never, DataPart>>
+  sessionId: string
 }
 
-export const runCommand = ({ writer }: Params) =>
+export const runCommand = ({ writer, sessionId }: Params) =>
   tool({
     description,
     inputSchema: z.object({
@@ -76,12 +79,18 @@ export const runCommand = ({ writer }: Params) =>
 
       let cmd: Command | null = null
 
+      const provisionedUrl = await provisionDatabase(sessionId)
+      const env = provisionedUrl
+        ? { DATABASE_URL: provisionedUrl }
+        : undefined
+
       try {
         cmd = await sandbox.runCommand({
           detached: true,
           cmd: command,
           args,
           sudo,
+          env,
         })
       } catch (error) {
         const richError = getRichError({
@@ -151,10 +160,13 @@ export const runCommand = ({ writer }: Params) =>
 
       const done = await cmd.wait()
       try {
-        const [stdout, stderr] = await Promise.all([
+        const [rawStdout, rawStderr] = await Promise.all([
           done.stdout(),
           done.stderr(),
         ])
+        const secrets = provisionedUrl ? [provisionedUrl] : []
+        const stdout = redactSecrets(rawStdout, secrets)
+        const stderr = redactSecrets(rawStderr, secrets)
 
         writer.write({
           id: toolCallId,
