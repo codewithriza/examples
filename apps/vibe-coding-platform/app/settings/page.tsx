@@ -17,6 +17,7 @@ interface SearchHit {
   id: string
   title: string
   kind: 'page' | 'database'
+  url?: string
 }
 
 function readSessionId(): string | null {
@@ -28,6 +29,10 @@ function readSessionId(): string | null {
   }
 }
 
+function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id
+}
+
 export default function SettingsPage() {
   const [sid, setSid] = useState<string | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
@@ -35,6 +40,8 @@ export default function SettingsPage() {
   const [results, setResults] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [urlOrId, setUrlOrId] = useState('')
+  const [pasting, setPasting] = useState(false)
 
   useEffect(() => {
     setSid(readSessionId())
@@ -108,12 +115,43 @@ export default function SettingsPage() {
       await fetch('/api/settings/notion/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sid, ...hit }),
+        body: JSON.stringify({ sid, id: hit.id, title: hit.title, kind: hit.kind }),
       })
       setMessage(`Selected: ${hit.title}`)
       refreshStatus()
     },
     [sid, refreshStatus]
+  )
+
+  const onPasteSubmit = useCallback(
+    async (e?: React.FormEvent) => {
+      e?.preventDefault()
+      if (!sid || !urlOrId.trim()) return
+      setPasting(true)
+      try {
+        const r = await fetch('/api/settings/notion/select', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sid, urlOrId }),
+        })
+        if (!r.ok) {
+          const data = (await r.json().catch(() => ({}))) as { error?: string }
+          setMessage(data.error ?? 'Could not resolve that Notion URL or ID.')
+          return
+        }
+        const data = (await r.json()) as { selection?: SearchHit }
+        setMessage(
+          data.selection
+            ? `Selected: ${data.selection.title}`
+            : 'Notion page selected.'
+        )
+        setUrlOrId('')
+        refreshStatus()
+      } finally {
+        setPasting(false)
+      }
+    },
+    [sid, urlOrId, refreshStatus]
   )
 
   if (!sid) {
@@ -148,7 +186,7 @@ export default function SettingsPage() {
         </div>
       )}
 
-      <section className="rounded-lg border border-border p-4 space-y-3">
+      <section className="rounded-lg border border-border p-4 space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-semibold uppercase text-xs tracking-wide">
@@ -158,7 +196,10 @@ export default function SettingsPage() {
               {status?.connected ? 'Connected' : 'Not connected'}
               {status?.selection ? (
                 <>
-                  {' · '}Context: <strong>{status.selection.title}</strong> ({status.selection.kind})
+                  {' · '}Context: <strong>{status.selection.title}</strong>{' '}
+                  <span className="text-secondary-foreground">
+                    ({status.selection.kind} · {shortId(status.selection.id)})
+                  </span>
                 </>
               ) : null}
             </p>
@@ -176,52 +217,82 @@ export default function SettingsPage() {
 
         {status?.connected && (
           <>
-            <form onSubmit={onSearch} className="flex gap-2">
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search your Notion pages/databases…"
-                className="font-mono"
-              />
-              <Button type="submit" size="sm" disabled={searching || !query.trim()}>
-                <SearchIcon className="size-4" />
-                {searching ? 'Searching' : 'Search'}
-              </Button>
-            </form>
+            <div className="space-y-2">
+              <label className="text-xs uppercase tracking-wide text-secondary-foreground">
+                Search workspace
+              </label>
+              <form onSubmit={onSearch} className="flex gap-2">
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search by page or database title…"
+                  className="font-mono"
+                />
+                <Button type="submit" size="sm" disabled={searching || !query.trim()}>
+                  <SearchIcon className="size-4" />
+                  {searching ? 'Searching' : 'Search'}
+                </Button>
+              </form>
 
-            {results.length > 0 && (
-              <ul className="divide-y divide-border rounded border border-border">
-                {results.map((hit) => {
-                  const isSelected = status?.selection?.id === hit.id
-                  return (
-                    <li
-                      key={hit.id}
-                      className="flex items-center justify-between px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate">{hit.title}</p>
-                        <p className="text-xs text-secondary-foreground">
-                          {hit.kind}
-                        </p>
-                      </div>
-                      <Button
-                        variant={isSelected ? 'secondary' : 'outline'}
-                        size="sm"
-                        onClick={() => onSelect(hit)}
+              {results.length > 0 && (
+                <ul className="divide-y divide-border rounded border border-border">
+                  {results.map((hit) => {
+                    const isSelected = status?.selection?.id === hit.id
+                    return (
+                      <li
+                        key={hit.id}
+                        className="flex items-center justify-between px-3 py-2 gap-3"
                       >
-                        {isSelected ? (
-                          <>
-                            <CheckIcon className="size-4" /> Selected
-                          </>
-                        ) : (
-                          'Use as context'
-                        )}
-                      </Button>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{hit.title}</p>
+                          <p className="text-xs text-secondary-foreground truncate">
+                            {hit.kind} · {shortId(hit.id)}
+                            {hit.url ? ` · ${hit.url.replace(/^https?:\/\//, '')}` : ''}
+                          </p>
+                        </div>
+                        <Button
+                          variant={isSelected ? 'secondary' : 'outline'}
+                          size="sm"
+                          onClick={() => onSelect(hit)}
+                        >
+                          {isSelected ? (
+                            <>
+                              <CheckIcon className="size-4" /> Selected
+                            </>
+                          ) : (
+                            'Use as context'
+                          )}
+                        </Button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs uppercase tracking-wide text-secondary-foreground">
+                Paste Notion page URL or ID
+              </label>
+              <form onSubmit={onPasteSubmit} className="flex gap-2">
+                <Input
+                  value={urlOrId}
+                  onChange={(e) => setUrlOrId(e.target.value)}
+                  placeholder="https://www.notion.so/… or 32-character id"
+                  className="font-mono"
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={pasting || !urlOrId.trim()}
+                >
+                  {pasting ? 'Resolving' : 'Use pasted page as context'}
+                </Button>
+              </form>
+              <p className="text-[11px] text-secondary-foreground">
+                Useful when a freshly-created page has not propagated to workspace search yet.
+              </p>
+            </div>
           </>
         )}
       </section>
